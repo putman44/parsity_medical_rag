@@ -1,6 +1,7 @@
 import { openai, openaiProvider } from '@/lib/openai';
 import { zodTextFormat } from 'openai/helpers/zod';
-import { searchClinicalNotes } from '@/lib/vector-search';
+import { findPatientByName } from '@/lib/patients';
+import { searchClinicalNotes, VectorFiltersSchema, type VectorSearchFilters } from '@/lib/vector-search';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -37,7 +38,11 @@ const selectorAgentSchema = z.object({
 					'The date of birth of the patient. In this format: YYYY-MM-DD',
 				),
 		})
-		.optional(),
+		.optional()
+		.nullable(),
+	vectorFilters: VectorFiltersSchema.nullable().describe(
+		'For vector search, extract metadata explicitly stated in the question; otherwise null.',
+	),
 });
 
 const fewShotExamples = [
@@ -107,7 +112,33 @@ export async function POST(request: Request) {
 		}
 
 		if (response.output_parsed?.action === 'vector_search') {
-			const searchResults = await searchClinicalNotes(query);
+			const values = response.output_parsed.vectorFilters;
+			if (values?.minAge != null && values.maxAge != null && values.minAge > values.maxAge) {
+				return NextResponse.json({ message: 'The requested age range is inconsistent.' });
+			}
+			if (values?.age != null && ((values.minAge != null && values.age < values.minAge) || (values.maxAge != null && values.age > values.maxAge))) {
+				return NextResponse.json({ message: 'The requested ages are inconsistent.' });
+			}
+
+			let filters: VectorSearchFilters | null = null;
+			if (values) {
+				const { patientName, ...searchValues } = values;
+				let patientId = searchValues.patientId;
+				if (patientName) {
+					const patients = await findPatientByName(patientName);
+					if (patients.length !== 1) {
+						return NextResponse.json({ message: patients.length === 0
+							? "I couldn't find a patient with that name."
+							: 'I found multiple patients with that name. Please provide a more specific name.' });
+					}
+					if (patientId && patientId !== patients[0].id) {
+						return NextResponse.json({ message: 'The patient name and ID do not match.' });
+					}
+					patientId = patients[0].id;
+				}
+				filters = { ...searchValues, patientId };
+			}
+			const searchResults = await searchClinicalNotes(query, { filters });
 
 			const summary = await openai.responses.create({
 				model: 'gpt-6-sol',
