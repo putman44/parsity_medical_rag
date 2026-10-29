@@ -1,17 +1,17 @@
-import { setDefaultResultOrder } from 'node:dns';
-import { Pinecone } from '@pinecone-database/pinecone';
-import { createEmbeddings, EMBEDDING_DIMENSIONS } from './openai';
+import { Pinecone } from "@pinecone-database/pinecone";
+import { setDefaultResultOrder } from "node:dns";
+import { createEmbeddings, EMBEDDING_DIMENSIONS } from "./openai";
 
 // Prefer IPv4. On many home/office networks Node's fetch tries a broken IPv6
 // route first, which shows up as endless ECONNRESET / EPIPE / "fetch failed"
 // against Pinecone. IPv4-first makes those disappear.
-setDefaultResultOrder('ipv4first');
+setDefaultResultOrder("ipv4first");
 
 export const pinecone = new Pinecone({
-	apiKey: process.env.PINECONE_API_KEY!,
+  apiKey: process.env.PINECONE_API_KEY!,
 });
 
-export const INDEX_NAME = process.env.PINECONE_INDEX || 'medical-notes';
+export const INDEX_NAME = process.env.PINECONE_INDEX || "medical-notes";
 
 /**
  * Retry a Pinecone call on transient network errors. Bulk upserts intermittently
@@ -19,123 +19,137 @@ export const INDEX_NAME = process.env.PINECONE_INDEX || 'medical-notes';
  * without a retry the whole ingest aborts partway. Retries with backoff.
  */
 async function withPineconeRetry<T>(
-	fn: () => Promise<T>,
-	tries = 8,
+  fn: () => Promise<T>,
+  tries = 8,
 ): Promise<T> {
-	for (let attempt = 1; ; attempt++) {
-		try {
-			return await fn();
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			const code = (err as { cause?: { code?: string } })?.cause?.code;
-			const transient =
-				code === 'ECONNRESET' ||
-				code === 'EPIPE' ||
-				/ECONNRESET|EPIPE|fetch failed|Request failed to reach Pinecone|network/i.test(
-					msg,
-				);
-			if (!transient || attempt >= tries) throw err;
-			// First failure is almost always a stale keep-alive socket (the
-			// connection idled out while we were embedding) — retry instantly
-			// and silently on a fresh connection. Warn + back off from there.
-			if (attempt === 1) continue;
-			const delay = Math.min(2000 * attempt, 10_000); // ~45s of patience total
-			console.warn(
-				`Pinecone hiccup (attempt ${attempt}/${tries}), retrying in ${delay / 1000}s…`,
-			);
-			await new Promise((r) => setTimeout(r, delay));
-		}
-	}
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = (err as { cause?: { code?: string } })?.cause?.code;
+      const transient =
+        code === "ECONNRESET" ||
+        code === "EPIPE" ||
+        /ECONNRESET|EPIPE|fetch failed|Request failed to reach Pinecone|network/i.test(
+          msg,
+        );
+      if (!transient || attempt >= tries) throw err;
+      // First failure is almost always a stale keep-alive socket (the
+      // connection idled out while we were embedding) — retry instantly
+      // and silently on a fresh connection. Warn + back off from there.
+      if (attempt === 1) continue;
+      const delay = Math.min(2000 * attempt, 10_000); // ~45s of patience total
+      console.warn(
+        `Pinecone hiccup (attempt ${attempt}/${tries}), retrying in ${delay / 1000}s…`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
 }
 
 /**
  * Ensure the Pinecone index exists, create if not
  */
 export async function ensureIndexExists(): Promise<void> {
-	const existingIndexes = await withPineconeRetry(() =>
-		pinecone.listIndexes(),
-	);
-	const indexExists = existingIndexes.indexes?.some(
-		(idx) => idx.name === INDEX_NAME,
-	);
+  const existingIndexes = await withPineconeRetry(() => pinecone.listIndexes());
+  const indexExists = existingIndexes.indexes?.some(
+    (idx) => idx.name === INDEX_NAME,
+  );
 
-	if (!indexExists) {
-		console.log(`Creating Pinecone index: ${INDEX_NAME}`);
-		await withPineconeRetry(() =>
-			pinecone.createIndex({
-				name: INDEX_NAME,
-				dimension: EMBEDDING_DIMENSIONS,
-				metric: 'cosine',
-				spec: {
-					serverless: {
-						cloud: 'aws',
-						region: 'us-east-1',
-					},
-				},
-				waitUntilReady: true,
-			}),
-		);
-		console.log(`Index ${INDEX_NAME} created successfully`);
-	} else {
-		console.log(`Index ${INDEX_NAME} already exists`);
-	}
+  if (!indexExists) {
+    console.log(`Creating Pinecone index: ${INDEX_NAME}`);
+    await withPineconeRetry(() =>
+      pinecone.createIndex({
+        name: INDEX_NAME,
+        dimension: EMBEDDING_DIMENSIONS,
+        metric: "cosine",
+        spec: {
+          serverless: {
+            cloud: "aws",
+            region: "us-east-1",
+          },
+        },
+        waitUntilReady: true,
+      }),
+    );
+    console.log(`Index ${INDEX_NAME} created successfully`);
+  } else {
+    console.log(`Index ${INDEX_NAME} already exists`);
+  }
 }
 
-export interface MedicalChunk {
-	id: string;
-	content: string; // the note text — the only part that gets embedded
-	// TODO (Week 1, in class): decide the metadata fields together. What would
-	// a clinic actually FILTER on? Every key rides along with the vector and
-	// can be filtered exactly; none of it is embedded. Pinecone accepts
-	// string | number | boolean | string[] values.
-	metadata: Record<string, string | number | boolean | string[]>;
-}
+export type MedicalNoteMetadata = {
+  patientId: string;
+  source: "postgres";
 
-export interface SearchResult {
-	id: string;
-	score: number;
-	content: string;
-	metadata: MedicalChunk['metadata'];
-}
+  birthDate?: string;
+  birthTimestamp?: number;
+
+  noteDate?: string;
+  noteTimestamp?: number;
+  noteYear?: number;
+  noteType?: string;
+
+  ageAtNote?: number;
+
+  gender?: string;
+  race?: string;
+  city?: string;
+  state?: string;
+};
+
+export type MedicalChunk = {
+  id: string;
+  content: string;
+  metadata: MedicalNoteMetadata;
+};
+
+export type SearchResult = {
+  id: string;
+  score: number;
+  content: string;
+  metadata: MedicalChunk["metadata"];
+};
 
 export async function upsertChunks(chunks: MedicalChunk[]): Promise<number> {
-	const index = pinecone.Index(INDEX_NAME);
+  const index = pinecone.Index(INDEX_NAME);
 
-	// Pinecone caps a request at 2MB. 1536 floats ≈ 25KB of JSON per vector plus
-	// the note text, so 100 per batch overshoots; the server hangs up mid-write
-	// and it surfaces as EPIPE / "fetch failed" on every retry.
-	const batchSize = 40;
-	let totalUpserted = 0;
+  // Pinecone caps a request at 2MB. 1536 floats ≈ 25KB of JSON per vector plus
+  // the note text, so 100 per batch overshoots; the server hangs up mid-write
+  // and it surfaces as EPIPE / "fetch failed" on every retry.
+  const batchSize = 40;
+  let totalUpserted = 0;
 
-	for (let i = 0; i < chunks.length; i += batchSize) {
-		const batch = chunks.slice(i, i + batchSize);
-		const texts = batch.map((c) => c.content);
-		const embeddings = await createEmbeddings(texts);
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+    const texts = batch.map((c) => c.content);
+    const embeddings = await createEmbeddings(texts);
 
-		const vectors = batch.map((chunk, idx) => ({
-			id: chunk.id,
-			values: embeddings[idx],
-			metadata: {
-				...chunk.metadata,
-				content: chunk.content,
-			},
-		}));
+    const vectors = batch.map((chunk, idx) => ({
+      id: chunk.id,
+      values: embeddings[idx],
+      metadata: {
+        ...chunk.metadata,
+        content: chunk.content,
+      },
+    }));
 
-		await withPineconeRetry(() => index.upsert({ records: vectors }));
-		totalUpserted += vectors.length;
-		console.log(`  upserted ${totalUpserted}/${chunks.length}`);
+    await withPineconeRetry(() => index.upsert({ records: vectors }));
+    totalUpserted += vectors.length;
+    console.log(`  upserted ${totalUpserted}/${chunks.length}`);
 
-		// Small breather between batches — keeps us clear of rate limits and
-		// gives flaky networks a moment to recover. Skipped after the last batch.
-		if (i + batchSize < chunks.length) {
-			await new Promise((r) => setTimeout(r, 250));
-		}
-	}
+    // Small breather between batches — keeps us clear of rate limits and
+    // gives flaky networks a moment to recover. Skipped after the last batch.
+    if (i + batchSize < chunks.length) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
 
-	return totalUpserted;
+  return totalUpserted;
 }
 
 export async function deleteAllChunks(): Promise<void> {
-	const index = pinecone.Index(INDEX_NAME);
-	await index.deleteAll();
+  const index = pinecone.Index(INDEX_NAME);
+  await index.deleteAll();
 }
