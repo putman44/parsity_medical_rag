@@ -14,7 +14,7 @@ import {
   type VectorSearchFilters,
 } from "./vector-filters";
 import { createEmbedding } from "./openai";
-import { pinecone } from "./pinecone";
+import { pinecone, type MedicalNoteMetadata } from "./pinecone";
 
 export {
   VectorFiltersSchema,
@@ -30,10 +30,28 @@ export type VectorSearchOptions = {
   filter?: Record<string, unknown>; // direct Pinecone filter for existing callers
 };
 
+export type ClinicalNoteMatch = {
+  id: string;
+  content: string;
+  metadata: MedicalNoteMetadata;
+  cosineScore: number;
+  cosineRank: number;
+};
+
+export type RerankedClinicalNoteMatch = ClinicalNoteMatch & {
+  rerankScore: number;
+  rerankRank: number;
+};
+
+export type ClinicalNoteSearchResult = {
+  cosineMatches: ClinicalNoteMatch[];
+  rerankedMatches: RerankedClinicalNoteMatch[];
+};
+
 export async function searchClinicalNotes(
   query: string,
   options: VectorSearchOptions = {},
-): Promise<string> {
+): Promise<ClinicalNoteSearchResult> {
   const { topK = 10, topN = 5, filters, filter } = options;
   const pineconeFilter = filter ?? buildPineconeFilter(filters);
 
@@ -47,26 +65,29 @@ export async function searchClinicalNotes(
     filter: pineconeFilter,
   });
 
-  const matchesWithScores = results.matches.map((match) => ({
-    id: match.id,
-    score: match.score,
-    content: match.metadata?.content as string,
-    metadata: match.metadata,
-  }));
+  const cosineMatches = results.matches.map((match, index) => {
+    const { content, ...metadata } = match.metadata ?? {};
 
-  // console.log(JSON.stringify(matchesWithScores, null, 2));
+    return {
+      id: match.id,
+      content: typeof content === "string" ? content : "",
+      metadata: metadata as MedicalNoteMetadata,
+      cosineScore: match.score ?? 0,
+      cosineRank: index + 1,
+    };
+  });
 
   // filter out scores below 0.3
-  const filteredMatches = matchesWithScores.filter(
-    (match) => match?.score && match.score > 0.3,
+  const filteredMatches = cosineMatches.filter(
+    (match) => match.cosineScore > 0.3,
   );
 
   if (filteredMatches.length === 0) {
-    return "No clinical notes matched the search and metadata filters.";
+    return { cosineMatches, rerankedMatches: [] };
   }
 
   const docs: string[] = filteredMatches.map(
-    (match) => `note: ${match.metadata?.content}`,
+    (match) => `note: ${match.content}`,
   );
 
   const reranked = await pinecone.inference.rerank({
@@ -78,7 +99,18 @@ export async function searchClinicalNotes(
 
   // scores against the query and the doc
 
-  // console.log(JSON.stringify(reranked.data, null, 2));
+  const rerankedMatches = reranked.data.flatMap((result, index) => {
+    const match = filteredMatches[result.index];
+    if (!match) return [];
 
-  return reranked.data.map((result) => result.document?.text).join("\n");
+    return [
+      {
+        ...match,
+        rerankScore: result.score,
+        rerankRank: index + 1,
+      },
+    ];
+  });
+
+  return { cosineMatches, rerankedMatches };
 }

@@ -11,20 +11,84 @@
  * Use the Responses API + zodTextFormat (see CLAUDE.md).
  */
 
-import type { Message } from '../agent';
+import { zodTextFormat } from "openai/helpers/zod";
+import { z } from "zod";
+import type { Message } from "../agent";
+import { openai } from "../openai";
 
-export type Plan = {
-	useSql: boolean;
-	useRag: boolean;
-	useScheduler: boolean;
-	/** false = a general question with no tie to the records — answer directly. */
-	needsSearch: boolean;
-	semanticQuery: string;
-};
+export const PlanSchema = z.object({
+  useSql: z
+    .boolean()
+    .describe(
+      "Whether the question needs structured database facts, counts, or exact lookups.",
+    ),
+
+  useRag: z
+    .boolean()
+    .describe(
+      "Whether the question needs meaning-based search of clinical notes.",
+    ),
+
+  useScheduler: z
+    .boolean()
+    .describe("Whether the user requests a scheduling action."),
+
+  needsSearch: z
+    .boolean()
+    .describe(
+      "Whether the question requires clinic records; false for general questions.",
+    ),
+
+  semanticQuery: z
+    .string()
+    .describe(
+      "Standalone request for the RAG worker, including any patient or date scope it needs; empty when useRag is false.",
+    ),
+});
+
+const ROUTING_PROMPT = `
+You are a routing agent for a medical-record assistant.
+
+Do not answer the user's question. Produce only a plan describing which workers
+are needed.
+
+Routing rules:
+- Use SQL for exact facts, dates, identities, counts, and structured filters.
+- Use RAG when the answer requires understanding the meaning of clinical notes.
+- Enable both SQL and RAG when both structured facts and note meaning are needed.
+- Use the scheduler only when the user explicitly requests a scheduling action.
+- Set needsSearch to false only for general questions that do not require clinic records.
+- When useRag is true, semanticQuery must be a standalone clinical-note search request.
+- When useRag is false, semanticQuery must be an empty string.
+`;
+
+export type Plan = z.infer<typeof PlanSchema>;
 
 export async function select(
-	query: string,
-	history: Message[] = [],
+  query: string,
+  history: Message[] = [],
 ): Promise<Plan> {
-	throw new Error('Not built yet — Week 3 (lib/agents/selector.ts)');
+  const response = await openai.responses.parse({
+    model: "gpt-6-luna",
+    input: [
+      {
+        role: "system",
+        content: ROUTING_PROMPT,
+      },
+      ...history.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+      {
+        role: "user",
+        content: query,
+      },
+    ],
+    text: {
+      format: zodTextFormat(PlanSchema, "selector_plan"),
+    },
+    reasoning: { effort: "none" },
+  });
+
+  return PlanSchema.parse(response.output_parsed);
 }

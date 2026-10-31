@@ -20,11 +20,7 @@ export function aggregate(
 ): ReturnType<typeof streamText> {
 	// text is the results ofr the previous agents
 	return streamText({
-		// gpt-4o, not gpt-4: gpt-4's 8K context window silently truncates
-		// patients with many notes — the answer just quietly gets worse for
-		// the patients who need it most. Check input size before you blame
-		// the prompt.
-		model: openaiProvider('gpt-4o'),
+		model: openaiProvider.responses('gpt-6-luna'),
 		system: `
 		Use the information provided to answer the user's question.
 		NEVER INVENT OR INFER MEDICAL INFORMATION. ONLY ANSWER FROM THE PROVIDED INFORMATION.
@@ -48,6 +44,5 @@ export function aggregate(
 			`,
 			},
 		],
-		temperature: 0.7,
 	});
 }

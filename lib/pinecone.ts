@@ -1,11 +1,5 @@
 import { Pinecone } from "@pinecone-database/pinecone";
-import { setDefaultResultOrder } from "node:dns";
 import { createEmbeddings, EMBEDDING_DIMENSIONS } from "./openai";
-
-// Prefer IPv4. On many home/office networks Node's fetch tries a broken IPv6
-// route first, which shows up as endless ECONNRESET / EPIPE / "fetch failed"
-// against Pinecone. IPv4-first makes those disappear.
-setDefaultResultOrder("ipv4first");
 
 export const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,

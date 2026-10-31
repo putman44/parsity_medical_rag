@@ -1,18 +1,21 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { z } from "zod";
+
+const SchedulingActionSchema = z.object({
+  patientName: z.string().min(1),
+  suggestedDate: z.iso.date(),
+  suggestedTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  reason: z.string().nullish(),
+});
+
+type SchedulingAction = z.infer<typeof SchedulingActionSchema>;
 
 interface Message {
   role: "user" | "assistant";
   content: string;
-}
-
-interface SchedulingAction {
-  patientName: string;
-  suggestedDate: string;
-  suggestedTime: string;
-  reason?: string | null;
 }
 
 interface SchedulingState {
@@ -35,7 +38,7 @@ const EXAMPLE_QUERIES = [
 export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [scheduling, setScheduling] = useState<SchedulingState | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -45,29 +48,14 @@ export default function Home() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, scheduling]);
-
-  // Parse scheduling action from message content
-  const parseSchedulingAction = (content: string): { text: string; action?: SchedulingAction } => {
-    const match = content.match(/<!-- SCHEDULING_ACTION (.+?) -->/);
-    if (match) {
-      try {
-        const action = JSON.parse(match[1]) as SchedulingAction;
-        const text = content.replace(/<!-- SCHEDULING_ACTION .+? -->/, "").trim();
-        return { text, action };
-      } catch {
-        return { text: content };
-      }
-    }
-    return { text: content };
-  };
+  }, [messages, scheduling, isLoading]);
 
   const sendQuery = async (userMessage: string) => {
-    if (!userMessage.trim() || isStreaming) return;
+    if (!userMessage.trim() || isLoading) return;
 
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-    setIsStreaming(true);
+    setIsLoading(true);
     setScheduling(null);
 
     try {
@@ -82,43 +70,51 @@ export default function Home() {
 
       if (!response.ok) throw new Error("Failed to get response");
 
-      const reader = response.body?.getReader();
+      if (!response.body) throw new Error("Response body was empty");
+
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let assistantMessage = "";
 
       setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
-      while (reader) {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        assistantMessage += chunk;
-
-        // Parse out scheduling action for display
-        const { text } = parseSchedulingAction(assistantMessage);
-
+        assistantMessage += decoder.decode(value, { stream: true });
         setMessages((prev) => {
-          const newMessages = [...prev];
-          newMessages[newMessages.length - 1] = {
+          const next = [...prev];
+          next[next.length - 1] = {
             role: "assistant",
-            content: text,
+            content: assistantMessage,
           };
-          return newMessages;
+          return next;
         });
       }
 
-      // Scheduling action rides in a response header (set by the route on the
-      // needsAppt short-circuit). Present => pop the confirm card.
-      const schedHeader = response.headers.get("X-Scheduling-Action");
-      if (schedHeader) {
-        const action = JSON.parse(
-          decodeURIComponent(schedHeader),
-        ) as SchedulingAction;
+      const finalChunk = decoder.decode();
+      if (finalChunk) {
+        assistantMessage += finalChunk;
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = {
+            role: "assistant",
+            content: assistantMessage,
+          };
+          return next;
+        });
+      }
+
+      const schedulingHeader = response.headers.get("X-Scheduling-Action");
+      if (schedulingHeader) {
+        const schedulingAction = SchedulingActionSchema.parse(
+          JSON.parse(decodeURIComponent(schedulingHeader)),
+        );
         setScheduling({
-          action,
-          date: action.suggestedDate,
-          time: action.suggestedTime,
+          action: schedulingAction,
+          date: schedulingAction.suggestedDate,
+          time: schedulingAction.suggestedTime,
           isSubmitting: false,
         });
       }
@@ -132,7 +128,7 @@ export default function Home() {
         },
       ]);
     } finally {
-      setIsStreaming(false);
+      setIsLoading(false);
     }
   };
 
@@ -144,7 +140,7 @@ export default function Home() {
   const handleScheduleSubmit = async () => {
     if (!scheduling) return;
 
-    setScheduling((prev) => prev ? { ...prev, isSubmitting: true } : null);
+    setScheduling((prev) => (prev ? { ...prev, isSubmitting: true } : null));
 
     try {
       const dateTime = `${scheduling.date}T${scheduling.time}:00`;
@@ -171,7 +167,7 @@ export default function Home() {
                 message: result.message || result.error,
               },
             }
-          : null
+          : null,
       );
 
       if (response.ok) {
@@ -190,9 +186,12 @@ export default function Home() {
           ? {
               ...prev,
               isSubmitting: false,
-              result: { success: false, message: "Failed to schedule appointment" },
+              result: {
+                success: false,
+                message: "Failed to schedule appointment",
+              },
             }
-          : null
+          : null,
       );
     }
   };
@@ -316,7 +315,10 @@ export default function Home() {
                   </div>
 
                   <p className="text-sm text-copilot-muted mb-3">
-                    Patient: <strong className="text-copilot-text">{scheduling.action.patientName}</strong>
+                    Patient:{" "}
+                    <strong className="text-copilot-text">
+                      {scheduling.action.patientName}
+                    </strong>
                   </p>
 
                   <div className="grid grid-cols-2 gap-3 mb-4">
@@ -329,7 +331,7 @@ export default function Home() {
                         value={scheduling.date}
                         onChange={(e) =>
                           setScheduling((prev) =>
-                            prev ? { ...prev, date: e.target.value } : null
+                            prev ? { ...prev, date: e.target.value } : null,
                           )
                         }
                         className="w-full px-3 py-2 bg-copilot-input border border-copilot-border rounded text-copilot-text text-sm"
@@ -344,7 +346,7 @@ export default function Home() {
                         value={scheduling.time}
                         onChange={(e) =>
                           setScheduling((prev) =>
-                            prev ? { ...prev, time: e.target.value } : null
+                            prev ? { ...prev, time: e.target.value } : null,
                           )
                         }
                         className="w-full px-3 py-2 bg-copilot-input border border-copilot-border rounded text-copilot-text text-sm"
@@ -394,10 +396,19 @@ export default function Home() {
               </div>
             )}
 
-            {isStreaming && messages[messages.length - 1]?.content === "" && (
-              <div className="flex justify-start">
+            {isLoading &&
+              (messages[messages.length - 1]?.role === "user" ||
+                messages[messages.length - 1]?.content === "") && (
+              <div
+                className="flex justify-start"
+                role="status"
+                aria-label="Preparing response"
+              >
                 <div className="bg-copilot-sidebar rounded-lg px-4 py-3">
-                  <div className="flex gap-1">
+                  <div className="flex items-center gap-1" aria-hidden="true">
+                    <span className="text-sm text-copilot-muted mr-2">
+                      Thinking
+                    </span>
                     <span className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce" />
                     <span
                       className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce"
@@ -426,11 +437,11 @@ export default function Home() {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask about patient records, or say 'schedule John Smith for next Tuesday'..."
               className="flex-1 px-4 py-3 bg-copilot-input border border-copilot-border rounded-lg text-copilot-text placeholder-copilot-muted focus:outline-none focus:border-copilot-accent"
-              disabled={isStreaming}
+              disabled={isLoading}
             />
             <button
               type="submit"
-              disabled={isStreaming || !input.trim()}
+              disabled={isLoading || !input.trim()}
               className="px-6 py-3 bg-copilot-accent text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <svg
