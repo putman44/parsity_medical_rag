@@ -16,6 +16,122 @@ import { z } from "zod";
 import type { Message } from "../agent";
 import { openai } from "../openai";
 
+const FEW_SHOT_EXAMPLES = [
+  // SQL
+  {
+    query: "How many patients have hypertension?",
+    plan: {
+      useSql: true,
+      useRag: false,
+      useScheduler: false,
+      needsSearch: true,
+      semanticQuery: "",
+    },
+  },
+  {
+    query: "How many female patients are over age 65?",
+    plan: {
+      useSql: true,
+      useRag: false,
+      useScheduler: false,
+      needsSearch: true,
+      semanticQuery: "",
+    },
+  },
+
+  // RAG / clinical notes
+  {
+    query: "What do the clinical notes say about chest pain?",
+    plan: {
+      useSql: false,
+      useRag: true,
+      useScheduler: false,
+      needsSearch: true,
+      semanticQuery:
+        "Search the clinical notes for documentation about chest pain.",
+    },
+  },
+  {
+    query: "What symptoms are mentioned in Avery Mueller's June 7, 1988 note?",
+    plan: {
+      useSql: false,
+      useRag: true,
+      useScheduler: false,
+      needsSearch: true,
+      semanticQuery:
+        "Find the symptoms documented in Avery Mueller's clinical note dated June 7, 1988.",
+    },
+  },
+
+  // SQL + RAG
+  {
+    query: "Which smokers have notes mentioning shortness of breath?",
+    plan: {
+      useSql: true,
+      useRag: true,
+      useScheduler: false,
+      needsSearch: true,
+      semanticQuery:
+        "Find clinical notes mentioning shortness of breath and identify the associated patients.",
+    },
+  },
+  {
+    query: "Which patients over 70 have notes discussing dizziness?",
+    plan: {
+      useSql: true,
+      useRag: true,
+      useScheduler: false,
+      needsSearch: true,
+      semanticQuery:
+        "Find clinical notes discussing dizziness and identify the associated patients.",
+    },
+  },
+
+  // Scheduling
+  {
+    query: "Book Avery Mueller for next Tuesday at 2pm.",
+    plan: {
+      useSql: false,
+      useRag: false,
+      useScheduler: true,
+      needsSearch: false,
+      semanticQuery: "",
+    },
+  },
+  {
+    query: "Schedule Avery Mueller for Friday morning.",
+    plan: {
+      useSql: false,
+      useRag: false,
+      useScheduler: true,
+      needsSearch: false,
+      semanticQuery: "",
+    },
+  },
+
+  // General / off-topic
+  {
+    query: "What is hypertension?",
+    plan: {
+      useSql: false,
+      useRag: false,
+      useScheduler: false,
+      needsSearch: false,
+      semanticQuery: "",
+    },
+  },
+  {
+    query: "What's the difference between a CT scan and an MRI?",
+    plan: {
+      useSql: false,
+      useRag: false,
+      useScheduler: false,
+      needsSearch: false,
+      semanticQuery: "",
+    },
+  },
+];
+
 export const PlanSchema = z.object({
   useSql: z
     .boolean()
@@ -60,6 +176,8 @@ Routing rules:
 - Set needsSearch to false only for general questions that do not require clinic records.
 - When useRag is true, semanticQuery must be a standalone clinical-note search request.
 - When useRag is false, semanticQuery must be an empty string.
+Examples:
+${JSON.stringify(FEW_SHOT_EXAMPLES, null, 2)}
 `;
 
 export type Plan = z.infer<typeof PlanSchema>;
