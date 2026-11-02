@@ -111,6 +111,10 @@ Rules:
   in the conversation history, do not assume the alias is a first or last name.
 - Resolve a clinical-note alias by searching notes.content for that exact alias,
   using notes."patientId", and joining that patient ID back to patients.
+- PostgreSQL identifiers are case-sensitive when quoted.
+- Always use the exact column names from the schema.
+- Always double-quote camelCase columns, for example:
+  p."firstName", p."lastName", p."maritalStatus", c."patientId".
 
 ${DATABASE_SCHEMA}
 
