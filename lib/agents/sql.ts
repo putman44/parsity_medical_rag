@@ -98,6 +98,8 @@ Rules:
 - Do not add a semicolon or multiple statements.
 - Use the physical table names and exact column names shown below.
 - Double-quote camelCase column names such as "patientId" and "firstName".
+- When returning patient names, include both firstName and lastName,
+  along with the patient ID when useful.
 - Add LIMIT 50 to row-listing queries. Do not add LIMIT to aggregate counts.
 - Use the supplied distinct values to map the user's wording to values that
   actually exist in this dataset.
