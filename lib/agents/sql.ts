@@ -101,6 +101,14 @@ Rules:
 - Add LIMIT 50 to row-listing queries. Do not add LIMIT to aggregate counts.
 - Use the supplied distinct values to map the user's wording to values that
   actually exist in this dataset.
+- Use conversation history to resolve follow-up references.
+- When an exact patient ID appears in the conversation history,
+  prefer that ID over guessing a patient name.
+- Clinical-note aliases may differ from names stored in the patients table.
+- If a follow-up refers to a clinical-note alias and no patient ID is available
+  in the conversation history, do not assume the alias is a first or last name.
+- Resolve a clinical-note alias by searching notes.content for that exact alias,
+  using notes."patientId", and joining that patient ID back to patients.
 
 ${DATABASE_SCHEMA}
 
