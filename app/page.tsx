@@ -143,8 +143,8 @@ export default function Home() {
     setScheduling((prev) => (prev ? { ...prev, isSubmitting: true } : null));
 
     try {
-      const dateTime = `${scheduling.date}T${scheduling.time}:00`;
-
+      const localDateTime = `${scheduling.date}T${scheduling.time}:00`;
+      const dateTime = new Date(localDateTime).toISOString();
       const response = await fetch("/api/schedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -399,29 +399,29 @@ export default function Home() {
             {isLoading &&
               (messages[messages.length - 1]?.role === "user" ||
                 messages[messages.length - 1]?.content === "") && (
-              <div
-                className="flex justify-start"
-                role="status"
-                aria-label="Preparing response"
-              >
-                <div className="bg-copilot-sidebar rounded-lg px-4 py-3">
-                  <div className="flex items-center gap-1" aria-hidden="true">
-                    <span className="text-sm text-copilot-muted mr-2">
-                      Thinking
-                    </span>
-                    <span className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce" />
-                    <span
-                      className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce"
-                      style={{ animationDelay: "0.1s" }}
-                    />
-                    <span
-                      className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce"
-                      style={{ animationDelay: "0.2s" }}
-                    />
+                <div
+                  className="flex justify-start"
+                  role="status"
+                  aria-label="Preparing response"
+                >
+                  <div className="bg-copilot-sidebar rounded-lg px-4 py-3">
+                    <div className="flex items-center gap-1" aria-hidden="true">
+                      <span className="text-sm text-copilot-muted mr-2">
+                        Thinking
+                      </span>
+                      <span className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce" />
+                      <span
+                        className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce"
+                        style={{ animationDelay: "0.1s" }}
+                      />
+                      <span
+                        className="w-2 h-2 bg-copilot-muted rounded-full animate-bounce"
+                        style={{ animationDelay: "0.2s" }}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
             <div ref={messagesEndRef} />
           </div>
         )}
