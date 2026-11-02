@@ -9,6 +9,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { openai } from "../openai";
 import { findPatientByName } from "../patients";
+import { prisma } from "../prisma";
 import {
   searchClinicalNotes,
   type VectorSearchFilters,
@@ -93,7 +94,6 @@ export async function runRag(semanticQuery: string): Promise<string> {
     }
 
     patientId = patients[0].id;
-
   }
 
   const filters: VectorSearchFilters = {
@@ -123,16 +123,41 @@ export async function runRag(semanticQuery: string): Promise<string> {
     return "No clinical notes matched the semantic query and metadata filters.";
   }
 
+  const patientIds = new Set(
+    rerankedMatches.map((item) => item.metadata.patientId),
+  );
+
+  const patients = await prisma.patient.findMany({
+    where: {
+      id: {
+        in: [...patientIds],
+      },
+    },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+    },
+  });
+
+  const patientNames = new Map();
+
+  for (const patient of patients) {
+    patientNames.set(patient.id, `${patient.firstName} ${patient.lastName}`);
+  }
+
   return rerankedMatches
-    .map((match) =>
-      [
+    .map((match) => {
+      const patientName = patientNames.get(match.metadata.patientId);
+      return [
         `<clinical-note rank="${match.rerankRank}" id="${match.id}">`,
         `patientId: ${match.metadata.patientId}`,
+        `patientName: ${patientName ?? "unknown"}`,
         `date: ${match.metadata.noteDate ?? "unknown"}`,
         `type: ${match.metadata.noteType ?? "unknown"}`,
         `content:\n${match.content}`,
         "</clinical-note>",
-      ].join("\n"),
-    )
+      ].join("\n");
+    })
     .join("\n\n");
 }
