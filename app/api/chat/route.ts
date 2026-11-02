@@ -2,6 +2,10 @@ import { aggregate } from "@/lib/agents/aggregator";
 import { runRag } from "@/lib/agents/rag";
 import { select } from "@/lib/agents/selector";
 import { runSql } from "@/lib/agents/sql";
+import {
+  buildSchedulingAction,
+  detectSchedulingIntent,
+} from "@/lib/scheduling";
 import { z } from "zod";
 
 const ChatRequestSchema = z.object({
@@ -32,11 +36,32 @@ export async function POST(request: Request) {
     // Scheduling is intentionally a later workflow. Keeping this branch here
     // prevents a scheduling request from accidentally becoming a data search.
     if (plan.useScheduler) {
-      return new Response("Scheduling is not connected yet.", { status: 501 });
+      const schedule = await detectSchedulingIntent(query, messages);
+
+      const action = buildSchedulingAction(schedule);
+
+      if (!action) {
+        return new Response(
+          "Who would you like to schedule the appointment for?",
+          { status: 200 },
+        );
+      }
+
+      return new Response(
+        "I found the appointment details. Please confirm below.",
+        {
+          status: 200,
+          headers: {
+            "X-Scheduling-Action": encodeURIComponent(JSON.stringify(action)),
+          },
+        },
+      );
     }
 
     if (plan.needsSearch && !plan.useSql && !plan.useRag) {
-      throw new Error("The selector requested a search without choosing a worker.");
+      throw new Error(
+        "The selector requested a search without choosing a worker.",
+      );
     }
 
     const [sqlResults, ragResults] = await Promise.all([
