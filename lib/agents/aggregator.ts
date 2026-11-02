@@ -9,40 +9,42 @@
  * the scheduling flow.
  */
 
-import { streamText } from 'ai';
-import { openaiProvider } from '../openai';
-import type { Message } from '../agent';
+import * as ai from "ai";
+import { wrapAISDK } from "langsmith/experimental/vercel";
+import type { Message } from "../agent";
+import { openaiProvider } from "../openai";
 
+const { streamText } = wrapAISDK(ai);
 export function aggregate(
-	query: string,
-	history: Message[],
-	results: string,
+  query: string,
+  history: Message[],
+  results: string,
 ): ReturnType<typeof streamText> {
-	// text is the results ofr the previous agents
-	return streamText({
-		model: openaiProvider.responses('gpt-6-luna'),
-		system: `
+  // text is the results ofr the previous agents
+  return streamText({
+    model: openaiProvider.responses("gpt-6-luna"),
+    system: `
 		Use the information provided to answer the user's question.
 		NEVER INVENT OR INFER MEDICAL INFORMATION. ONLY ANSWER FROM THE PROVIDED INFORMATION.
 
 		If you do not have the information to answer the question, say so plainly and do not make up information.
 		`,
-		messages: [
-			{
-				role: 'user',
-				content: `
+    messages: [
+      {
+        role: "user",
+        content: `
 					<user-question>
 						Original user query: ${query}
 					</user-question>	
 
-					<conversation-history>${history.map((h) => `${h.role}: ${h.content}`).join('\n')}
+					<conversation-history>${history.map((h) => `${h.role}: ${h.content}`).join("\n")}
 					</conversation-history>
 
 					<retrieved-data>	
 					${results}
 					</retrieved-data>
 			`,
-			},
-		],
-	});
+      },
+    ],
+  });
 }

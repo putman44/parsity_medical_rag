@@ -26,7 +26,7 @@
 		"@prisma/client": "^7.10.0",
 		"@qdrant/js-client-rest": "1.19.0",
 		"ai": "^7.0.135",
-		"langsmith": "^0.10.9",
+		"langsmith": "^0.11.7",
 		"next": "^16.4.2",
 		"openai": "^7.30.1",
 		"react": "^19.3.0",
