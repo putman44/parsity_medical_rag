@@ -1,10 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import * as path from 'path';
 
-// LLM-as-judge evals hit the real OpenAI API — excluded from the default
-// unit run. Use `npm run test:evals` to run them (loads .env).
-const runEvals = !!process.env.RUN_EVALS;
-
+// Paid evals run only with RUN_EVALS=1; their server starts via global setup.
 export default defineConfig({
   resolve: {
     alias: {
@@ -14,8 +11,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['**/*.test.ts'],
-    exclude: ['node_modules', '.next', ...(runEvals ? [] : ['lib/evals/**'])],
-    ...(runEvals ? { setupFiles: ['dotenv/config'] } : {}),
+    include: process.env.RUN_EVALS === '1' ? ['**/*.test.ts'] : ['app/**/*.test.ts', 'lib/agents/**/*.test.ts'],
+    exclude: ['node_modules', '.next', ...(process.env.RUN_EVALS === '1' ? [] : ['lib/evals/**'])],
+    fileParallelism: false, // parallel files + shared server/DB made the evals time out
+    reporters: ['verbose'], // every test + its time, and console output
+    setupFiles: process.env.RUN_EVALS === '1' ? ['dotenv/config'] : [],
+    globalSetup: process.env.RUN_EVALS === '1' ? ['./vitest.global-setup.ts'] : [],
   },
 });

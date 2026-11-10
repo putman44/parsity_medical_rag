@@ -114,7 +114,7 @@ Rules:
 
 /**
  * Build the scheduling action object the UI card needs, or null if this isn't
- * a bookable request. The route sends this in the X-Scheduling-Action header.
+ * a bookable request. The streaming chat route sends this in X-Scheduling-Action.
  */
 export function buildSchedulingAction(intent: SchedulingIntent) {
   if (!intent.patientName) {

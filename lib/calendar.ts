@@ -65,7 +65,7 @@ export async function scheduleAppointment(
   const apiKey = process.env.CAL_API_KEY!;
   const eventTypeId = Number(process.env.CAL_EVENT_TYPE_ID);
   const attendeeEmail =
-    request.patientEmail ?? process.env.CAL_TEST_ATTENDEE_EMAIL;
+    request.patientEmail ?? process.env.CAL_TEST_ATTENDEE_EMAIL ?? process.env.DEMO_EMAIL;
 
   if (!attendeeEmail) {
     return {
@@ -75,6 +75,7 @@ export async function scheduleAppointment(
     };
   }
 
+  try {
   const response = await fetch(`${CAL_API_BASE}/bookings`, {
     method: "POST",
     headers: {
@@ -83,14 +84,16 @@ export async function scheduleAppointment(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      start: request.dateTime,
+      start: new Date(request.dateTime).toISOString(),
       eventTypeId,
       attendee: {
         name: request.patientName,
         email: attendeeEmail,
         timeZone: "America/Denver",
         language: "en",
+        ...(process.env.DEMO_PHONE_NUMBER ? { phoneNumber: process.env.DEMO_PHONE_NUMBER } : {}),
       },
+      bookingFieldsResponses: request.notes ? { notes: request.notes } : undefined,
       metadata: request.notes
         ? {
             notes: request.notes,
@@ -113,8 +116,12 @@ export async function scheduleAppointment(
 
   return {
     success: true,
-    bookingId: data?.data?.uid ?? String(data?.data?.id ?? ""),
+    bookingId: (data?.data?.uid ?? data?.data?.id)?.toString(),
+    bookingUrl: data?.data?.uid ? `https://app.cal.com/booking/${data.data.uid}` : undefined,
   };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+  }
 }
 
 /**

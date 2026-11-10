@@ -13,10 +13,23 @@ const SchedulingActionSchema = z.object({
 
 type SchedulingAction = z.infer<typeof SchedulingActionSchema>;
 
-interface Message {
+const ToolResponseSchema = z.object({
+  message: z.string(),
+  schedulingAction: z.object({
+    patientName: z.string().min(1),
+    date: z.iso.date(),
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    reason: z.string().nullish(),
+  }).nullish(),
+  availableTools: z.array(z.object({ name: z.string(), description: z.string() })).optional(),
+  trace: z.array(z.object({ tool: z.string(), input: z.unknown().optional(), output: z.unknown().optional() })).optional(),
+});
+
+type Message = {
   role: "user" | "assistant";
   content: string;
-}
+  toolTrace?: Pick<z.infer<typeof ToolResponseSchema>, "availableTools" | "trace">;
+};
 
 interface SchedulingState {
   action: SchedulingAction;
@@ -39,6 +52,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [useTools, setUseTools] = useState(false);
   const [scheduling, setScheduling] = useState<SchedulingState | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -59,7 +73,7 @@ export default function Home() {
     setScheduling(null);
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch(useTools ? "/api/chat-tools" : "/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -69,6 +83,20 @@ export default function Home() {
       });
 
       if (!response.ok) throw new Error("Failed to get response");
+
+      if (useTools) {
+        const { message, schedulingAction, availableTools, trace } = ToolResponseSchema.parse(await response.json());
+        setMessages((prev) => [...prev, { role: "assistant", content: message, toolTrace: { availableTools, trace } }]);
+        if (schedulingAction) {
+          setScheduling({
+            action: { patientName: schedulingAction.patientName, suggestedDate: schedulingAction.date, suggestedTime: schedulingAction.time, reason: schedulingAction.reason },
+            date: schedulingAction.date,
+            time: schedulingAction.time,
+            isSubmitting: false,
+          });
+        }
+        return;
+      }
 
       if (!response.body) throw new Error("Response body was empty");
 
@@ -220,6 +248,10 @@ export default function Home() {
             Medical Records Assistant
           </h1>
         </div>
+        <label className="flex items-center gap-2 text-sm text-copilot-text">
+          <input type="checkbox" checked={useTools} onChange={(e) => setUseTools(e.target.checked)} disabled={isLoading} />
+          Tool calling
+        </label>
       </header>
 
       {/* Messages */}
@@ -283,6 +315,14 @@ export default function Home() {
                   {message.role === "assistant" ? (
                     <div className="prose-chat">
                       <ReactMarkdown>{message.content}</ReactMarkdown>
+                      {message.toolTrace?.availableTools && (
+                        <details className="mt-3 text-xs">
+                          <summary>Tool calls</summary>
+                          {message.toolTrace.availableTools.map((tool) => (
+                            <p key={tool.name}>{message.toolTrace?.trace?.some((call) => call.tool === tool.name) ? "Called" : "Skipped"} {tool.name}: {tool.description}</p>
+                          ))}
+                        </details>
+                      )}
                     </div>
                   ) : (
                     <p>{message.content}</p>
