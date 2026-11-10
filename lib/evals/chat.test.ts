@@ -14,14 +14,14 @@ const CASES = [
 		threshold: 0.8,
 	},
 	{
-		question: 'Does Carla have diabetes?',
-		criteria: 'She does not',
+		question: 'Does America Sawayn have a recorded diabetes diagnosis?',
+		criteria: 'No recorded diabetes diagnosis for America Sawayn',
 		threshold: 0.8,
 	},
 
 	{
-		question: 'Does Carla have diabetes?',
-		criteria: 'She does',
+		question: 'Does Alishia Pouros have a recorded diabetes diagnosis?',
+		criteria: 'Yes, Alishia Pouros has a recorded diabetes diagnosis',
 		threshold: 0.8,
 	},
 	{
