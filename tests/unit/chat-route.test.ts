@@ -14,6 +14,10 @@ vi.mock("@/lib/agents/rag", () => ({ runRag: mocks.runRag }));
 vi.mock("@/lib/agents/aggregator", () => ({
   aggregate: mocks.aggregate,
 }));
+vi.mock("@/lib/scheduling", () => ({
+  detectSchedulingIntent: vi.fn(),
+  buildSchedulingAction: vi.fn(),
+}));
 
 import { POST } from "@/app/api/chat/route";
 
@@ -63,15 +67,7 @@ describe("POST /api/chat", () => {
     expect(mocks.aggregate).toHaveBeenCalledWith(
       "How many patients with diabetes have notes describing difficulty exercising?",
       messages,
-      [
-        "<sql-results>",
-        "SQL patients",
-        "</sql-results>",
-        "",
-        "<rag-results>",
-        "RAG notes",
-        "</rag-results>",
-      ].join("\n"),
+      "<sql-results>\nSQL patients\n</sql-results>\n\n<rag-results>\nRAG notes\n</rag-results>",
     );
     expect(await response.text()).toBe("final answer");
   });

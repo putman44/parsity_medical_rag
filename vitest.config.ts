@@ -11,7 +11,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: process.env.RUN_EVALS === '1' ? ['**/*.test.ts'] : ['app/**/*.test.ts', 'lib/agents/**/*.test.ts'],
+    include: process.env.RUN_EVALS === '1' ? ['**/*.test.ts'] : ['app/**/*.test.ts', 'lib/agents/**/*.test.ts', 'tests/unit/**/*.test.ts'],
     exclude: ['node_modules', '.next', ...(process.env.RUN_EVALS === '1' ? [] : ['lib/evals/**'])],
     fileParallelism: false, // parallel files + shared server/DB made the evals time out
     reporters: ['verbose'], // every test + its time, and console output

@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   parse: vi.fn(),
   findPatientByName: vi.fn(),
   searchClinicalNotes: vi.fn(),
+  patientFindMany: vi.fn(),
 }));
 
 vi.mock("@/lib/openai", () => ({
@@ -12,6 +13,9 @@ vi.mock("@/lib/openai", () => ({
 
 vi.mock("@/lib/patients", () => ({
   findPatientByName: mocks.findPatientByName,
+}));
+vi.mock("@/lib/prisma", () => ({
+  prisma: { patient: { findMany: mocks.patientFindMany } },
 }));
 
 vi.mock("@/lib/vector-search", async () => {
@@ -36,6 +40,7 @@ describe("runRag", () => {
     mocks.findPatientByName.mockResolvedValue([
       { id: "87741719-d8a6-f2ac-104b-7885598a0a71" },
     ]);
+    mocks.patientFindMany.mockResolvedValue([{ id: "87741719-d8a6-f2ac-104b-7885598a0a71", firstName: "Avery", lastName: "Mueller" }]);
     mocks.searchClinicalNotes.mockResolvedValue({
       cosineMatches: [],
       rerankedMatches: [
