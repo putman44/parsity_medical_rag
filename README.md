@@ -1,231 +1,203 @@
-# Medical RAG: AI-Powered Patient Records
+# Medical RAG: AI-Powered Patient Records Assistant
 
-> **Start here:** [docs/WHAT-WERE-BUILDING.md](docs/WHAT-WERE-BUILDING.md) — what we're building and why, in two minutes.
+An AI-powered medical records assistant developed during Parsity. It helps staff ask natural-language questions across structured patient records and free-text clinical notes. The application combines LLM-generated SQL against PostgreSQL, semantic retrieval from a Pinecone index, and model-driven tool calling to produce answers grounded in retrieved data.
 
-## The Challenge
+**Data:** The [Synthea Coherent Dataset](https://synthea.mitre.org/) is fully synthetic educational patient data, not real patient records. The shared, read-only PostgreSQL database contains a roughly 200-patient subset and about 21,000 SOAP-style clinical notes. PostgreSQL is the system of record; the Pinecone index is derived from those notes.
 
-You're building an AI assistant for healthcare providers. Doctors need to quickly find patient information across thousands of records—but the data is messy:
+For course context, see [What We're Building](docs/WHAT-WERE-BUILDING.md) and the [data structure guide](docs/DATA_STRUCTURE.md).
 
-- **Structured data**: Names, dates, diagnoses, medications, lab values
-- **Unstructured data**: Clinical notes written by doctors in free-form text
+## Features
 
-Traditional search fails because:
-- Keyword search for "breathing problems" misses notes about "dyspnea" or "shortness of breath"
-- SQL queries can't understand natural language like "patients who might have heart issues"
-- LLMs don't know your private patient data
+| Capability                        | Implementation                                                                                                                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Natural-language record questions | The chat UI sends questions and conversation history to the selected route.                                                                                                         |
+| Structured data lookup            | A SQL agent generates a PostgreSQL SELECT using the schema and actual distinct condition and state values; a read-only database role limits writes.                                 |
+| Clinical note retrieval           | A RAG agent applies exact patient/date filters when present, then uses Pinecone vector search and reranking for note meaning.                                                       |
+| Combined SQL + RAG                | Questions needing both sources call both retrieval workers and combine their text for answer generation.                                                                            |
+| Agentic tool selection            | A separate /api/chat-tools route lets the model choose SQL, clinical-note search, or both, and returns a tool-call trace.                                                           |
+| Appointment scheduling            | Chat proposes an action; the UI presents a confirmation card and posts to Cal.com only after the user confirms. Requires Cal.com configuration; the confirmation gate is in the UI. |
+| Tracing                           | LangSmith wraps OpenAI calls when tracing is enabled; the retrieval path also wraps AI SDK answer streaming. This is LLM-call tracing, not end-to-end SQL/Pinecone spans.           |
+| Evaluation                        | Vitest runs offline tests; Jev (@typesafe-ai/sdk) scores live answer cases and additional tests inspect tool selection.                                                             |
 
-**Your mission**: Build a Retrieval-Augmented Generation (RAG) system that combines the precision of SQL with the semantic understanding of vector search.
+This is an educational prototype. Its prompts ask for grounded answers and the tool route declines medical advice, but these behaviors are not clinical safety guarantees.
 
----
+## Architecture
 
-## What You'll Build
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       User Query                             │
-│     "Find diabetic patients with notes about foot pain"      │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Selector (LLM)  lib/agents/selector.ts      │
-│          Routes only: { useSql, useRag, useScheduler }       │
-└─────────────────────────────────────────────────────────────┘
-                    │                         │
-         structured │                         │ semantic
-                    ▼                         ▼
-┌─────────────────────────┐       ┌─────────────────────────┐
-│   PostgreSQL (Neon)      │       │     Pinecone Vectors    │
-│   Structured Data        │       │     Clinical Notes      │
-│                          │       │                         │
-│  • patients              │       │  • Embeddings           │
-│  • conditions            │       │  • Semantic search      │
-│  • medications           │       │  • patient_id filter    │
-│  • lab results           │       │                         │
-└─────────────────────────┘       └─────────────────────────┘
-                    │                         │
-                    └────────────┬────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────┐
-│             Aggregator (LLM)  lib/agents/aggregator.ts       │
-│    Grounds the answer in what came back — and streams it     │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    UI[Next.js chat frontend] --> MODE{Selected chat mode}
+    MODE -->|Selector workflow /api/chat| SELECT[LLM selector]
+    MODE -->|Tool-calling workflow /api/chat-tools| TOOLS[AI agent chooses tools]
+    SELECT --> SQL[SQL agent]
+    SELECT --> RAG[RAG agent]
+    TOOLS --> SQL
+    TOOLS --> RAG
+    SQL --> PG[(Neon PostgreSQL)]
+    RAG --> PC[(Pinecone clinical-note index)]
+    SQL --> ANSWER[Answer generation]
+    RAG --> ANSWER
+    ANSWER --> UI
+    SELECT --> PROPOSE[Scheduling proposal]
+    TOOLS --> PROPOSE
+    PROPOSE --> CONFIRM[UI confirmation card]
+    CONFIRM --> CAL[Cal.com booking via /api/schedule]
 ```
 
-In week 4 you build the same thing a second way: hand the model the tools and
-let *it* choose, on `/api/chat-graph`, then compare the two on your own
-questions.
+The **selector workflow** (/api/chat) asks an LLM for a routing plan, runs SQL and RAG concurrently when both are needed, and streams a grounded answer through the aggregator. Scheduling takes a separate branch before retrieval. The **tool-calling workflow** (/api/chat-tools) uses the Vercel AI SDK: the model chooses among the existing SQL and RAG agents, a scheduling proposal tool, and an arXiv research tool across multiple steps, then returns a JSON answer and a tool-call trace. The UI offers a toggle between these workflows.
 
----
+/api/chat-graph and lib/graph.ts are LangGraph coursework scaffolding and currently throw; they are **not** the implemented tool-calling path. The working tool path is /api/chat-tools.
 
-## 6-Week Curriculum
+The SQL agent uses text-to-SQL, with no per-question query builder. The database's read-only role is the current write-prevention boundary; a SQL statement validator remains a TODO in lib/agents/sql.ts. Retrieved note matches and SQL rows are passed to the answer model as context. The Pinecone index can be rebuilt from PostgreSQL with npm run vectorize (an API-using, index-writing operation).
 
-| Week | Topic | What You'll Build | Homework |
-|------|-------|-------------------|----------|
-| 1 | **Intro to RAG + ingestion** | Embeddings, metadata design, vectorize the 21k notes into Pinecone | Chunking project (announced in class) |
-| 2 | **Retrieval & reranking** | `searchClinicalNotes`, `/api/search`, two-stage retrieval | [CHALLENGE-NOTE-INGEST.md](docs/CHALLENGE-NOTE-INGEST.md) |
-| 3 | **The agent pipeline** | selector → SQL ‖ RAG → aggregator, plus human-confirmed scheduling | [CHALLENGE-TOOL-CALLING.md](docs/CHALLENGE-TOOL-CALLING.md) |
-| 4 | **Tool-calling & LangGraph** | The model picks the tools instead of your `if` statements | [CHALLENGE-LANGGRAPH.md](docs/CHALLENGE-LANGGRAPH.md) |
-| 5 | **Evals, security & capstone build** | Your query log becomes a test suite; then break the system with a poisoned document and defend it | Announced in class |
-| 6 | **Demo day** | Present what you built — 5 minutes, one decision defended with a number | — |
+## Testing and Evaluation
 
-Your capstone runs alongside weeks 5–6: you pick the data, scope it down, and build it. The plan is due in week 4.
+| Suite                                              | Observed result  | Scope                                                                                             |
+| -------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------- |
+| Offline Vitest tests                               | **15/15 passed** | Route, agent, vector-search, and scheduling clarification/confirmation behavior with mocks        |
+| TypeScript validation                              | **Passed**       | tsc --noEmit                                                                                      |
+| Original Jev live evaluations                      | **7/7 passed**   | SQL counts, diagnosis lookups, scheduling wording, medical-advice refusal, and off-topic handling |
+| Additional live RAG and tool-selection evaluations | **5/5 passed**   | Clinical-note retrieval, combined SQL + RAG answers, and tool choices                             |
+| **Total live evaluations**                         | **12/12 passed** | Observed single-run results                                                                       |
 
----
+These are supplied results from one completed run, not a measure of production accuracy or reliability. The live suites call the model and, for scored answers, Jev; the extra cases also assert which retrieval tools were called. The separate lib/evals/retrieval.test.ts LLM-judge coursework suite is still incomplete, so its TODOs are not included in the 12 passing live cases.
 
-## Quick Start
+## Running the Project
 
-You need **Node 22 or newer** and your own free [OpenAI](https://platform.openai.com) and [Pinecone](https://pinecone.io) keys. The database is **provided, read-only** — already loaded, you just connect to it.
+Use Node.js 22 or newer. The course database is provided read-only; do not migrate or seed it. Install dependencies and generate the local Prisma client:
 
 ```bash
-git clone <repo-url> && cd medical-rag
 npm install
-cp .env.example .env
+npm run db:generate
 ```
 
-Open `.env` and paste in these three values:
+The generated client is local; this command does not migrate the shared database. You can inspect the read-only tables with npm run db:studio.
 
-```
-DATABASE_URL="<shared in class — a read-only connection string, paste it as-is>"
-OPENAI_API_KEY=sk-...      # your own
-PINECONE_API_KEY=...       # your own
-```
+Create a local .env file with credentials supplied for your own setup. The repository does not include an .env.example; the names below are the configuration reference. Never commit .env.
 
-Then:
+| Variable                                                | Purpose                                                                                      |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| DATABASE_URL                                            | Read-only PostgreSQL connection for patient records                                          |
+| OPENAI_API_KEY                                          | Model calls and embeddings                                                                   |
+| PINECONE_API_KEY, PINECONE_INDEX                        | Clinical-note vector search; the index must already contain vectors for retrieval            |
+| DIRECT_URL                                              | Optional direct PostgreSQL connection for the vectorization script                           |
+| CAL_API_KEY, CAL_EVENT_TYPE_ID                          | Optional Cal.com booking after UI confirmation                                               |
+| CAL_TEST_ATTENDEE_EMAIL                                 | Optional fallback attendee email for the scheduling demo when no patient email is supplied   |
+| LANGSMITH_TRACING, LANGSMITH_API_KEY, LANGSMITH_PROJECT | Optional LLM tracing; set the tracing flag to true to enable it                              |
+| TYPESAFE_API_KEY                                        | Jev scoring in live evaluations                                                              |
+| OPENAI_BASE_URL                                         | Optional OpenAI-compatible proxy URL                                                         |
+| EVAL_BASE_URL                                           | Optional URL for the additional live suite and server check (default: http://localhost:3000) |
+
+Start the app at <http://localhost:3000>:
 
 ```bash
-npm run db:generate   # builds the DB client (local codegen — does NOT touch the database)
-npm run dev           # open http://localhost:3000
+npm run dev
 ```
 
-That's it. The Postgres database is read-only and already loaded, so there's nothing to load or migrate. Browse the tables anytime with `npm run db:studio`.
+If your Pinecone index has not been populated, the optional vectorization command reads the course database and writes note vectors to your index. It uses OpenAI and Pinecone APIs and may incur charges. Start with a small batch before indexing all notes:
 
-Your **Pinecone** index is yours, though — `npm run vectorize` builds it from the notes in Postgres. That's week 1.
+```bash
+npm run vectorize -- --limit 5
+npm run vectorize
+```
 
----
+The offline test command runs the default Vitest selection; it excludes lib/evals:
+
+```bash
+npm run test:run
+npx tsc --noEmit
+```
+
+Live evaluations require configured API credentials, a reachable database, and a populated Pinecone index. They make paid API calls and may incur charges. Vitest global setup starts a local Next.js dev server if one is not already reachable. The original Jev suite connects specifically to http://localhost:3000; EVAL_BASE_URL applies to the additional clinical-tools suite and the server availability check.
+
+Run the two suites behind the reported 12/12 result separately, or select one named case:
+
+```bash
+RUN_EVALS=1 npx vitest run lib/evals/chat.test.ts
+RUN_EVALS=1 npx vitest run lib/evals/clinical-tools.test.ts
+RUN_EVALS=1 npx vitest run lib/evals/chat.test.ts -t "How many patients have diabetes?"
+RUN_EVALS=1 npx vitest run lib/evals/clinical-tools.test.ts -t "combined question calls both retrieval tools"
+```
+
+The broader command below also runs the unfinished LLM-judge coursework file, whose implemented tests currently fail because its evaluators still throw. It is not the command behind the reported 12/12 result:
+
+```bash
+npm run test:evals
+```
+
+Use npm test only when you want Vitest watch mode.
+
+## Engineering Challenges
+
+- **Tool choice:** Compare an explicit selector plan with model-driven tool calls and inspect the returned tool trace.
+- **Structured plus unstructured retrieval:** Combine exact SQL facts with semantically matched notes, while applying exact patient and date filters where available.
+- **Grounded generation:** Feed retrieved SQL rows and note text to the answer model and instruct it to state when evidence is missing.
+- **Action control:** Keep scheduling as a proposal until the user confirms the booking card.
+- **Evaluation:** Check both answer criteria and the tools selected for SQL-only, note-only, and combined questions.
 
 ## Project Structure
 
-```
-medical-rag/
-├── app/
-│   ├── page.tsx                  # Chat UI (pre-built, intentionally plain)
-│   └── api/
-│       ├── chat/route.ts         # W3: THE ORCHESTRATOR — selector → sql ‖ rag → aggregator
-│       ├── chat-graph/route.ts   # W4: the tool-calling channel (LangGraph)
-│       ├── search/route.ts       # W2: raw vector search, for poking at retrieval
-│       └── schedule/route.ts     # W3: Cal.com booking (human-confirmed)
-├── lib/
-│   ├── agents/
-│   │   ├── selector.ts           # W3: routes — { useSql, useRag, useScheduler }. Nothing else.
-│   │   ├── sql.ts                # W3: text-to-SQL. The LLM writes the query.
-│   │   ├── rag.ts                # W3: semantic search → context block
-│   │   └── aggregator.ts         # W3: the ONLY streamer (provided)
-│   ├── graph.ts                  # W4: the tool-calling graph
-│   ├── vector-search.ts          # W2: Pinecone query + rerank
-│   ├── pinecone.ts               # W1: index + upsert (MedicalChunk lives here)
-│   ├── openai.ts                 # the ONE place we configure OpenAI (+ LangSmith)
-│   ├── reranker.ts               # W2: two-stage retrieval
-│   ├── scheduling.ts             # W3: intent detection → proposed action
-│   ├── calendar.ts               # W3: Cal.com adapter
-│   ├── patients.ts               # findPatientByName — scheduling's one exact lookup
-│   ├── langsmith.ts              # W3: tracing config (the switch is in openai.ts)
-│   ├── security/                 # W5: poisoned-document defense (built in class)
-│   ├── evals/                    # W5: retrieval + LLM-judge evals
-│   └── prisma.ts                 # database client
-├── prisma/schema.prisma          # the schema of the read-only database
-├── scripts/
-│   ├── vectorize.ts              # W1: Postgres notes → Pinecone
-│   ├── similarity.ts             # W1: cosine-similarity playground
-│   └── bible/fetch.ts            # npm run bible:fetch — downloads the KJV text
-├── visuals/                      # in-class explainers (open visuals/index.html)
-├── data/                         # Synthea source data + security fixtures
-└── docs/                         # challenge specs, one per week
-```
+| Path                                       | Role                                                             |
+| ------------------------------------------ | ---------------------------------------------------------------- |
+| app/page.tsx                               | Chat UI, mode toggle, and scheduling confirmation                |
+| app/api/chat/route.ts                      | Selector-based orchestration                                     |
+| app/api/chat-tools/route.ts                | Implemented model-driven tool calling                            |
+| app/api/chat-graph/route.ts, lib/graph.ts  | Unfinished LangGraph coursework path                             |
+| app/api/search/route.ts                    | Direct vector-search endpoint for retrieval inspection           |
+| app/api/schedule/route.ts, lib/calendar.ts | Confirmed Cal.com booking                                        |
+| lib/agents/selector.ts                     | Structured routing plan                                          |
+| lib/agents/sql.ts                          | Schema-grounded text-to-SQL                                      |
+| lib/agents/rag.ts, lib/vector-search.ts    | Clinical-note vector retrieval and reranking                     |
+| lib/agents/aggregator.ts                   | Streaming answer generation for /api/chat                        |
+| lib/openai.ts                              | Model configuration, embeddings, and optional LangSmith wrapping |
+| lib/evals/                                 | Jev cases, tool-selection checks, and LLM-judge coursework stubs |
+| scripts/vectorize.ts                       | Rebuild the Pinecone note index from PostgreSQL                  |
 
-Every stub says which week it belongs to in its header comment — open a file and
-the first lines tell you `Week 3 · assignment: docs/CHALLENGE-...`.
+## Example Questions
 
-There is deliberately **no** `sql-queries.ts` / query-builder layer. The SQL
-agent's LLM writes the SQL from the schema plus real distinct values from the
-data. When a query comes back wrong, you fix the prompt or the grounding in
-`lib/agents/sql.ts` — you don't add a function per question.
+| Question                                                                                | Retrieval or action                                               |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| “How many patients have hypertension?”                                                  | SQL aggregation                                                   |
+| “How many patients had a heart attack?”                                                 | SQL with condition-value grounding, such as Myocardial Infarction |
+| “Which patients are short of breath?”                                                   | Clinical-note vector search                                       |
+| “Does a patient have a recorded diabetes diagnosis, and what does a specific note say?” | SQL + RAG                                                         |
+| “Book a follow-up appointment on Tuesday at 2 p.m.”                                     | Scheduling proposal, then human confirmation                      |
 
----
-
-## The Data
-
-We're using the [Synthea Coherent Dataset](https://synthea.mitre.org/): statistically realistic, **fully synthetic** patient records — zero real people, so it's safe to break. The shared database is a ~200-patient subset (it fits the Neon free tier):
-
-- **200 patients** with conditions (diabetes, hypertension, COPD, …), medications, lab observations, and encounters
-- **~21,000 clinical notes** in SOAP format — this is what we search semantically
-- Notes average ~450 characters, which is why week 1 needs no chunking: a note *is* a chunk. (The Bible homework is where you have to actually chunk something.)
-
-See [docs/DATA_STRUCTURE.md](docs/DATA_STRUCTURE.md) for the FHIR resource details.
-
----
-
-## Example Queries
-
-Once built, your system will handle queries like:
-
-| Query | How It's Answered |
-|-------|-------------------|
-| "How many patients have hypertension?" | SQL aggregation |
-| "How many patients had a heart attack?" | SQL — and the LLM has to map "heart attack" to the stored `Myocardial Infarction` |
-| "Which patients have both hypertension and hyperlipidemia?" | SQL with two subqueries |
-| "Which patients are short of breath?" | Vector search — there is no column for this |
-| "Tell me about Avery Mueller's recent visits" | Hybrid: SQL for the facts, notes for the story |
-| "Book her a follow-up on Tuesday" | Scheduling — proposes, then waits for a human to confirm |
-
-Skip lab-threshold questions like "A1C over 9" — the synthetic data is almost all
-normal readings, so they return one row and look broken.
-
----
+Avoid lab-threshold demo questions such as “A1C over 9”: the synthetic subset has few qualifying observations.
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Framework | Next.js 15 |
-| Database | Neon PostgreSQL (read-only, provided) |
-| Vector DB | Pinecone — index + hosted reranker (`bge-reranker-v2-m3`) |
-| Embeddings | OpenAI `text-embedding-3-small`, 1536 dims, cosine |
-| Agents | OpenAI Responses API + Zod structured outputs; Vercel AI SDK for streaming |
-| Tool calling | LangGraph (week 4) |
-| Observability | LangSmith |
-| Scheduling | Cal.com |
-| ORM | Prisma |
-| Styling | Tailwind CSS |
+| Component        | Technology                                                                   |
+| ---------------- | ---------------------------------------------------------------------------- |
+| Frontend and API | Next.js 16.4.2, React, Tailwind CSS                                          |
+| Database         | Neon PostgreSQL, Prisma                                                      |
+| Vector retrieval | Pinecone, OpenAI text-embedding-3-small (1,536 dimensions), hosted reranking |
+| AI workflows     | OpenAI Responses API and Zod, Vercel AI SDK                                  |
+| Observability    | Optional LangSmith tracing                                                   |
+| Scheduling       | Cal.com                                                                      |
+| Testing          | Vitest, Jev (@typesafe-ai/sdk)                                               |
 
----
+## Course Documentation
 
-## Weekly Challenges
+The original six-week curriculum remains useful context for this Parsity project:
 
-Each week's homework has a spec in `docs/CHALLENGE-*.md`. Most weeks the real
-deliverable is a **short video** explaining what you built and why — that's the
-part a model can't write for you.
+| Week | Topic                                     | Course material                                           |
+| ---- | ----------------------------------------- | --------------------------------------------------------- |
+| 1    | RAG ingestion and embeddings              | Vectorize clinical notes into Pinecone; chunking exercise |
+| 2    | Retrieval and reranking                   | [Note ingestion challenge](docs/CHALLENGE-NOTE-INGEST.md) |
+| 3    | Selector, SQL, RAG, scheduling            | [Tool-calling challenge](docs/CHALLENGE-TOOL-CALLING.md)  |
+| 4    | Model-directed tool calling and LangGraph | [LangGraph challenge](docs/CHALLENGE-LANGGRAPH.md)        |
+| 5    | Evaluation and security                   | Query-log evaluations and poisoned-document exercise      |
+| 6    | Demo                                      | Present an engineering decision with evidence             |
 
-Running the tests:
+The course capstone runs alongside weeks 5–6. Weekly challenges include a short video explaining the implementation and its tradeoffs. The repository also includes [in-class visuals](visuals/README.md) and the [data structure guide](docs/DATA_STRUCTURE.md).
 
-```bash
-npm test              # the unit suite — should be fully green on a fresh clone
-npm run test:evals    # week 5's LLM-judge evals (hits the real API, costs money)
-```
-
----
+Clinical notes average roughly 450 characters in this course subset, so a note is usually one vector chunk. The separate Bible homework exercises longer-text chunking.
 
 ## Resources
 
-- [RAG Explained](https://www.pinecone.io/learn/retrieval-augmented-generation/)
-- [OpenAI Embeddings](https://platform.openai.com/docs/guides/embeddings)
-- [Pinecone Docs](https://docs.pinecone.io/) · [reranking](https://docs.pinecone.io/guides/search/rerank-results)
-- [Anthropic — Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — the workflow-vs-agent vocabulary we use from week 2 on
-- [LangGraph JS — tool calling](https://langchain-ai.github.io/langgraphjs/how-tos/tool-calling/)
-- [Prisma Docs](https://www.prisma.io/docs)
-
----
-
-## License
-
-MIT - Built for educational purposes with synthetic data.
+- [RAG overview](https://www.pinecone.io/learn/retrieval-augmented-generation/)
+- [OpenAI embeddings](https://platform.openai.com/docs/guides/embeddings)
+- [Pinecone documentation](https://docs.pinecone.io/) and [reranking guide](https://docs.pinecone.io/guides/search/rerank-results)
+- [Anthropic: Building Effective Agents](https://www.anthropic.com/research/building-effective-agents)
+- [LangGraph JavaScript quickstart](https://docs.langchain.com/oss/javascript/langgraph/quickstart)
+- [Prisma documentation](https://www.prisma.io/docs)
